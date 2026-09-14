@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /realities/{realityId} {
+      // Direct reads may resolve Public/Unlisted realities; Private is owner-only.
+      allow get: if resource.data.visibility == 'public'
+                 || resource.data.visibility == 'unlisted'
+                 || (request.auth != null && resource.data.authorId == request.auth.uid);
+
+      // Discovery queries may return Public content or the signed-in owner's own content.
+      allow list: if resource.data.visibility == 'public'
+                  || (request.auth != null && resource.data.authorId == request.auth.uid);
+
+      // Client-side migration may create only the caller's own reality and cannot seed metrics.
+      allow create: if request.auth != null
+                    && request.resource.data.authorId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['title', 'visibility'])
+                    && request.resource.data.forkCount == 0
+                    && request.resource.data.views == 0
+                    && request.resource.data.savedCount == 0;
+
+      // Aggregate metrics and ownership are server-controlled.
+      allow update: if request.auth != null
+                    && resource.data.authorId == request.auth.uid
+                    && !request.resource.data.diff(resource.data).affectedKeys()
+                      .hasAny(['forkCount', 'views', 'savedCount', 'authorId', 'isPublic', 'parentRealityId', 'forkSourceEventId', 'createdAt']);
+
+      allow delete: if request.auth != null && resource.data.authorId == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null
+                    && request.auth.uid == userId
+                    && !request.resource.data.diff(resource.data).affectedKeys()
+                      .hasAny(['subscription', 'plan', 'roles', 'quota', 'usage']);
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && !request.resource.data.keys().hasAny(['subscription', 'plan', 'roles', 'quota', 'usage']);
+    }
+
+    match /users/{userId}/saved/{realityId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // These collections are server-only. Clients obtain usage/metrics through API endpoints.
+    match /usage/{docId} {
+      allow read, write: if false;
+    }
+
+    match /anonymousRealities/{realityId} {
+      allow read, write: if false;
+    }
+
+    match /viewDedupe/{markerId} {
+      allow read, write: if false;
+    }
+  }
+}
